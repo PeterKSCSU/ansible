@@ -1,0 +1,159 @@
+- name: Project 2 hardening
+  hosts: localhost
+  connection: local
+  become: true
+
+  tasks:
+
+   vars:
+    # Find the name with: systemctl status 4654
+    unneeded_service: CHANGE_ME
+
+  tasks:
+
+    # ----- EXAMPLE (safe to keep) — shows the shape of a task -------------
+    - name: Example — make sure a package is present
+      ansible.builtin.package:
+        name: ca-certificates
+        state: present
+    # ---------------------------------------------------------------------
+
+    # ======================= Domain A — System / SSH =====================
+    - name: SSH — remove Include lines (drop-ins can re-enable passwords)
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^Include '
+        state: absent
+
+    - name: SSH — disallow root login and password auth
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+
+    - name: SSH — restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+    - name: UFW — allow SSH
+      community.general.ufw:
+        rule: allow
+        name: OpenSSH
+
+    - name: UFW — default-deny incoming and enable
+      community.general.ufw:
+        state: enabled
+        default: deny
+        direction: incoming
+
+    - name: Remove the unauthorized scheduled job
+      ansible.builtin.file:
+        path: /etc/cron.d/cache_warm
+        state: absent
+
+    - name: Stop and disable the unnecessary service
+      ansible.builtin.service:
+        name: "{{ unneeded_service }}"
+        state: stopped
+        enabled: false
+
+    - name: Remove the unnecessary service's package
+      ansible.builtin.package:
+        name: "{{ unneeded_service }}"
+        state: absent
+
+    - name: fail2ban — install
+      ansible.builtin.package:
+        name: fail2ban
+        state: present
+
+    - name: fail2ban — protect sshd
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [sshd]
+          enabled = true
+        mode: "0644"
+
+    - name: fail2ban — enable and restart
+      ansible.builtin.service:
+        name: fail2ban
+        enabled: true
+        state: restarted
+
+    - name: Fix the world-writable application directory
+      ansible.builtin.file:
+        path: /var/www/html/cache
+        mode: "0755"
+
+    # ================= Domain B — Users / privilege escalation ===========
+    - name: Remove the unauthorized sudo account
+      ansible.builtin.user:
+        name: sysupdate
+        state: absent
+        remove: true
+
+    - name: Give ubuntu a password so it can still sudo without NOPASSWD
+      ansible.builtin.user:
+        name: ubuntu
+        password: "{{ 'ubuntu' | password_hash('sha512') }}"
+
+    - name: Remove the passwordless-sudo (NOPASSWD) rule
+      ansible.builtin.file:
+        path: /etc/sudoers.d/90-course-nopasswd
+        state: absent
+
+    - name: Remove the unexpected SUID-root binary
+      ansible.builtin.file:
+        path: /usr/local/bin/runhelper
+        state: absent
+
+    - name: Fix the account that has a blank password
+      ansible.builtin.user:
+        name: kioskuser
+        password: "{{ 'kioskuser' | password_hash('sha512') }}"
+
+    - name: Restrict the world-readable credentials file
+      ansible.builtin.file:
+        path: /opt/intranet/settings.ini
+        owner: root
+        group: root
+        mode: "0600"
+
+    # ================== Domain C — Database least-privilege ==============
+    # These need the community.mysql collection + pymysql. Install once:
+    #     ansible-galaxy collection install community.mysql
+    #     sudo apt-get install -y python3-pymysql
+    #
+    # priv without append_privs replaces ALL existing grants (incl. GRANT OPTION).
+    - name: Scope the webapp account to CRUD on shopdb
+      community.mysql.mysql_user:
+        name: webapp
+        host: "%"
+        priv: "shopdb.*:SELECT,INSERT,UPDATE,DELETE"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Scope the reporting account to read-only on shopdb
+      community.mysql.mysql_user:
+        name: reporting
+        host: "%"
+        priv: "shopdb.*:SELECT"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Scope the backup account to dump privileges
+      community.mysql.mysql_user:
+        name: backup
+        host: localhost
+        priv: "*.*:SELECT,LOCK TABLES,SHOW VIEW"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+
+    - name: Drop the anonymous account
+      community.mysql.mysql_user:
+        name: ""
+        host: localhost
+        state: absent
+        login_unix_socket: /var/run/mysqld/mysqld.sock
