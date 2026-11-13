@@ -70,16 +70,27 @@
         path: /etc/cron.d/cache_warm
         state: absent
 
+        - name: Check for the debugshell unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/debugshell.service
+      register: debugshell_unit
+
     - name: Stop and disable the unnecessary service
       ansible.builtin.service:
-        name: "{{ unneeded_service }}"
+        name: debugshell
         state: stopped
         enabled: false
+      when: debugshell_unit.stat.exists
 
-    - name: Remove the unnecessary service's package
-      ansible.builtin.package:
-        name: "{{ unneeded_service }}"
+    - name: Remove the unnecessary service's unit file
+      ansible.builtin.file:
+        path: /etc/systemd/system/debugshell.service
         state: absent
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: debugshell_unit.stat.exists
 
     - name: fail2ban — install
       ansible.builtin.package:
