@@ -6,9 +6,24 @@
   tasks:
 
    vars:
-    # Find the name with: systemctl status 4654
+    
+    ubuntu_password: "ubuntu"
+    kioskuser_password: "kioskuser"
+    rogue_pid: "4654"
+    mysql_socket: /var/run/mysqld/mysqld.sock
     unneeded_service: CHANGE_ME
+  
+  handlers:
+    - name: Restart ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
 
+    - name: Restart fail2ban
+      ansible.builtin.service:
+        name: fail2ban
+        state: restarted
+  
   tasks:
 
     # ----- EXAMPLE (safe to keep) — shows the shape of a task -------------
