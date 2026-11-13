@@ -7,6 +7,7 @@
     unneeded_service: debugshell
     ubuntu_password: ubuntu
     kioskuser_password: kioskuser
+    ansible_python_interpreter: /usr/bin/python3
     mysql_socket: /var/run/mysqld/mysqld.sock
 
   handlers:
@@ -152,6 +153,10 @@
     #     sudo apt-get install -y python3-pymysql
     #
     # priv without append_privs replaces ALL existing grants (incl. GRANT OPTION).
+    - name: Install PyMySQL (needed by the mysql_user tasks)
+      ansible.builtin.package:
+        name: python3-pymysql
+        state: present
     - name: Scope the webapp account to CRUD on shopdb
       community.mysql.mysql_user:
         name: webapp
