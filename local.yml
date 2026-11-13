@@ -3,16 +3,12 @@
   connection: local
   become: true
 
-  tasks:
-
-   vars:
-    
-    ubuntu_password: "ubuntu"
-    kioskuser_password: "kioskuser"
-    rogue_pid: "4654"
+  vars:
+    unneeded_service: debugshell
+    ubuntu_password: ubuntu
+    kioskuser_password: kioskuser
     mysql_socket: /var/run/mysqld/mysqld.sock
-    unneeded_service: CHANGE_ME
-  
+
   handlers:
     - name: Restart ssh
       ansible.builtin.service:
@@ -23,7 +19,11 @@
       ansible.builtin.service:
         name: fail2ban
         state: restarted
-  
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
   tasks:
 
     # ----- EXAMPLE (safe to keep) — shows the shape of a task -------------
@@ -39,6 +39,7 @@
         path: /etc/ssh/sshd_config
         regexp: '^Include '
         state: absent
+      notify: Restart ssh
 
     - name: SSH — disallow root login and password auth
       ansible.builtin.lineinfile:
@@ -48,11 +49,7 @@
       loop:
         - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
         - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
-
-    - name: SSH — restart ssh
-      ansible.builtin.service:
-        name: ssh
-        state: restarted
+      notify: Restart ssh
 
     - name: UFW — allow SSH
       community.general.ufw:
@@ -70,27 +67,23 @@
         path: /etc/cron.d/cache_warm
         state: absent
 
-        - name: Check for the debugshell unit
+    - name: Check for the unnecessary service's unit
       ansible.builtin.stat:
-        path: /etc/systemd/system/debugshell.service
-      register: debugshell_unit
+        path: /etc/systemd/system/{{ unneeded_service }}.service
+      register: unneeded_unit
 
     - name: Stop and disable the unnecessary service
       ansible.builtin.service:
-        name: debugshell
+        name: "{{ unneeded_service }}"
         state: stopped
         enabled: false
-      when: debugshell_unit.stat.exists
+      when: unneeded_unit.stat.exists
 
     - name: Remove the unnecessary service's unit file
       ansible.builtin.file:
-        path: /etc/systemd/system/debugshell.service
+        path: /etc/systemd/system/{{ unneeded_service }}.service
         state: absent
-
-    - name: Reload systemd
-      ansible.builtin.systemd_service:
-        daemon_reload: true
-      when: debugshell_unit.stat.exists
+      notify: Reload systemd
 
     - name: fail2ban — install
       ansible.builtin.package:
@@ -104,12 +97,13 @@
           [sshd]
           enabled = true
         mode: "0644"
+      notify: Restart fail2ban
 
-    - name: fail2ban — enable and restart
+    - name: fail2ban — enable and start
       ansible.builtin.service:
         name: fail2ban
         enabled: true
-        state: restarted
+        state: started
 
     - name: Fix the world-writable application directory
       ansible.builtin.file:
@@ -126,7 +120,8 @@
     - name: Give ubuntu a password so it can still sudo without NOPASSWD
       ansible.builtin.user:
         name: ubuntu
-        password: "{{ 'ubuntu' | password_hash('sha512') }}"
+        password: "{{ ubuntu_password | password_hash('sha512') }}"
+      no_log: true
 
     - name: Remove the passwordless-sudo (NOPASSWD) rule
       ansible.builtin.file:
@@ -141,7 +136,8 @@
     - name: Fix the account that has a blank password
       ansible.builtin.user:
         name: kioskuser
-        password: "{{ 'kioskuser' | password_hash('sha512') }}"
+        password: "{{ kioskuser_password | password_hash('sha512') }}"
+      no_log: true
 
     - name: Restrict the world-readable credentials file
       ansible.builtin.file:
@@ -161,25 +157,25 @@
         name: webapp
         host: "%"
         priv: "shopdb.*:SELECT,INSERT,UPDATE,DELETE"
-        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_unix_socket: "{{ mysql_socket }}"
 
     - name: Scope the reporting account to read-only on shopdb
       community.mysql.mysql_user:
         name: reporting
         host: "%"
         priv: "shopdb.*:SELECT"
-        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_unix_socket: "{{ mysql_socket }}"
 
     - name: Scope the backup account to dump privileges
       community.mysql.mysql_user:
         name: backup
         host: localhost
         priv: "*.*:SELECT,LOCK TABLES,SHOW VIEW"
-        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_unix_socket: "{{ mysql_socket }}"
 
     - name: Drop the anonymous account
       community.mysql.mysql_user:
         name: ""
         host: localhost
         state: absent
-        login_unix_socket: /var/run/mysqld/mysqld.sock
+        login_unix_socket: "{{ mysql_socket }}"
